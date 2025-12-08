@@ -962,10 +962,15 @@ export default function App() {
   // --- Actions ---
 
   const addSegment = (name: string, dailyPeriods: number) => {
+    // Generate a single ID to use both for the segment and its calendar key.  If
+    // these IDs diverge, the calendar will never be found when generating
+    // reports, causing the "Gerar Relatório" button to produce no data.  See
+    // calculateRapi where calendars are looked up using cls.segmentId.
+    const newId = generateUUID();
     setState(prev => ({
-        ...prev,
-        segments: [...prev.segments, { id: generateUUID(), name, dailyPeriods }],
-        calendars: { ...prev.calendars, [generateUUID()]: {} }
+      ...prev,
+      segments: [...prev.segments, { id: newId, name, dailyPeriods }],
+      calendars: { ...prev.calendars, [newId]: {} }
     }));
   };
 
