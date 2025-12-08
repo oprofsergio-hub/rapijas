@@ -1,7 +1,7 @@
 
-import { AppState, CalendarStatus, DayOfWeek, RapiReportItem, Segment } from '../types';
+import { AppState, CalendarStatus, RapiReportItem, Segment } from '../types';
 
-const STORAGE_KEY = 'rapi_pro_v2'; // Bumped version for schema change
+const STORAGE_KEY = 'rapi_pro_v2';
 
 // Initial Seed Data
 const DEFAULT_SEGMENT: Segment = { id: 'default', name: 'Ensino Regular', dailyPeriods: 5 };
@@ -20,14 +20,13 @@ export const loadState = (): AppState => {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
-      // Migration check: if old state layout (no segments), migrate it
       if (!parsed.segments) {
         return {
           ...DEFAULT_STATE,
           teachers: parsed.teachers || [],
           classes: (parsed.classes || []).map((c: any) => ({ ...c, segmentId: 'default' })),
           schedule: parsed.schedule || {},
-          calendars: { 'default': parsed.calendar || {} }, // Migrate old calendar to default segment
+          calendars: { 'default': parsed.calendar || {} },
           absences: parsed.absences || []
         };
       }
@@ -42,6 +41,7 @@ export const loadState = (): AppState => {
 export const saveState = (state: AppState) => {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    console.log("State saved successfully");
   } catch (e) {
     console.error("Failed to save state", e);
   }
@@ -60,54 +60,109 @@ export const generateUUID = () => {
 // --- RAPI Calculation Engine ---
 
 export const getWeekdayFromDate = (dateStr: string): number => {
-  // Create date as UTC to avoid timezone issues
   const [y, m, d] = dateStr.split('-').map(Number);
   const date = new Date(Date.UTC(y, m - 1, d));
   return date.getUTCDay(); // 0 = Sun, 1 = Mon, ...
 };
 
+// Helper to get all dates between start and end
+export const getDatesInRange = (startDate: string, endDate: string): string[] => {
+  const dates = [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  
+  // Safety check to prevent infinite loops if dates are bad
+  if (start > end) return [];
+
+  const current = new Date(start);
+  while (current <= end) {
+    dates.push(current.toISOString().split('T')[0]);
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+};
+
+export interface ReportFilter {
+  startDate: string;
+  endDate: string;
+  segmentId?: string;
+  classId?: string;
+  teacherId?: string;
+}
+
 export const calculateRapi = (
   state: AppState,
-  yearMonth: string,
-  view: 'detailed' | 'teacher_summary'
+  filters: ReportFilter,
+  view: 'detailed' | 'teacher_summary' | 'daily_log'
 ): RapiReportItem[] => {
   const { calendars, schedule, absences, teachers, classes, segments } = state;
+  const { startDate, endDate, segmentId, classId, teacherId } = filters;
+
+  const dateRange = getDatesInRange(startDate, endDate);
   
-  // 1. Calculate Expected Classes (Aulas Previstas)
-  // Map Key: teacherId|classId|subject -> count
+  // Detailed tracking for "daily_log" view
+  const dailyLog: RapiReportItem[] = [];
+  
+  // Accumulators for summary views
+  // Key: teacherId|classId|subject
   const expectedCounts: Record<string, number> = {};
 
-  // We iterate over CLASSES first, because each class dictates its own calendar (via segment)
+  // 1. Iterate Classes
   classes.forEach(cls => {
+    // Apply Class Filter
+    if (classId && cls.id !== classId) return;
+    // Apply Segment Filter
+    if (segmentId && cls.segmentId !== segmentId) return;
+
     const segment = segments.find(s => s.id === cls.segmentId);
     if (!segment) return;
 
-    const classCalendar = calendars[cls.segmentId]?.[yearMonth] || {};
-    const dailySchedule = schedule[cls.id]; // { [day]: { [period]: Item } }
-
+    // Get Calendar for this segment
+    // We need to look up month by month, but the calendar structure is { 'YYYY-MM': { 'YYYY-MM-DD': status } }
+    // Or we can just access direct date keys if we flattened it, but currently it is nested.
+    
+    const dailySchedule = schedule[cls.id]; 
     if (!dailySchedule) return;
 
-    Object.entries(classCalendar).forEach(([dateStr, status]) => {
-      if (status !== 'letivo' && status !== 'sabado_letivo') return;
+    // Iterate every date in the selected range
+    dateRange.forEach(dateStr => {
+      const ym = dateStr.substring(0, 7);
+      const status = calendars[cls.segmentId]?.[ym]?.[dateStr];
+
+      // Only count 'letivo'. 
+      // NOTE: 'sabado_letivo' logic usually requires a mapped weekday (e.g., "This saturday follows Monday schedule").
+      // Since we don't have Saturday Mapping in UI yet, we skip saturday unless explicitly customized.
+      // For now, we only count M-F if status is letivo.
+      if (status !== 'letivo') return;
 
       const dayOfWeek = getWeekdayFromDate(dateStr);
-      
-      // If Saturday letivo, we assume it follows a specific schedule or logic.
-      // For simplicity in this version, if 'sabado_letivo', we skip automatic calculation 
-      // UNLESS the user explicitly mapped Saturdays (which we removed for simplicity in V2 to focus on Segments).
-      // However, to keep it functional: let's assume Sat Letivo doesn't add automatic schedule 
-      // unless we add specific Saturday mapping feature back. 
-      // Standard RAPI usually ignores Saturday unless it's a "make up" day for a specific weekday.
-      // Let's count weekday classes only for now to be safe, or assume strict Weekday matching.
-      if (dayOfWeek === 0 || dayOfWeek === 6) return; 
+      if (dayOfWeek === 0 || dayOfWeek === 6) return; // Skip weekends for standard calc
 
       const slots = dailySchedule[dayOfWeek];
       if (!slots) return;
 
-      Object.values(slots).forEach(slot => {
+      Object.entries(slots).forEach(([periodIdx, slot]) => {
         if (slot.teacherId && slot.subject) {
+          // Apply Teacher Filter
+          if (teacherId && slot.teacherId !== teacherId) return;
+
           const key = `${slot.teacherId}|${cls.id}|${slot.subject}`;
           expectedCounts[key] = (expectedCounts[key] || 0) + 1;
+
+          // Add to daily log if requested
+          if (view === 'daily_log') {
+             const tName = teachers.find(t => t.id === slot.teacherId)?.name || 'Unknown';
+             dailyLog.push({
+                 date: dateStr,
+                 teacherName: tName,
+                 className: cls.name,
+                 subject: slot.subject,
+                 expected: 1,
+                 given: 1, // Will subtract later if absence found
+                 absences: 0,
+                 percentage: 100
+             });
+          }
         }
       });
     });
@@ -116,21 +171,55 @@ export const calculateRapi = (
   // 2. Aggregate Absences
   const absenceCounts: Record<string, number> = {};
   
+  // We need to map absences to the specific daily log entries if in daily view
+  // But absences in the system are "Bulk" (amount: 2). 
+  // For the Daily Log, we might just list the absence record separately or try to deduct.
+  // For simplicity in Daily Log: We list absences as negative entries or distinct entries.
+  
   absences.forEach(abs => {
-    if (abs.date.startsWith(yearMonth)) {
+    if (abs.date >= startDate && abs.date <= endDate) {
+       // Filters
+       if (teacherId && abs.teacherId !== teacherId) return;
+       if (classId && abs.classId !== classId) return;
+       // We can't easily filter absence by segment unless we lookup class -> segment, which is expensive, but ok.
+       if (segmentId) {
+           const c = classes.find(cx => cx.id === abs.classId);
+           if (c?.segmentId !== segmentId) return;
+       }
+
        const key = `${abs.teacherId}|${abs.classId}|${abs.subject}`;
        absenceCounts[key] = (absenceCounts[key] || 0) + abs.amount;
+
+       if (view === 'daily_log') {
+          const tName = teachers.find(t => t.id === abs.teacherId)?.name || 'Unknown';
+          const cName = classes.find(c => c.id === abs.classId)?.name || 'Unknown';
+          dailyLog.push({
+              date: abs.date,
+              teacherName: tName,
+              className: cName,
+              subject: abs.subject,
+              expected: 0,
+              given: 0,
+              absences: abs.amount,
+              percentage: 0,
+              isAbsenceRecord: true
+          });
+       }
     }
   });
 
-  // 3. Merge and Build Report
+  if (view === 'daily_log') {
+      return dailyLog.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  }
+
+  // 3. Merge Summary Data
   const allKeys = new Set([...Object.keys(expectedCounts), ...Object.keys(absenceCounts)]);
   const report: RapiReportItem[] = [];
 
   allKeys.forEach(key => {
-    const [teacherId, classId, subject] = key.split('|');
-    const teacher = teachers.find(t => t.id === teacherId);
-    const classGroup = classes.find(c => c.id === classId);
+    const [tIdKey, cIdKey, subjKey] = key.split('|');
+    const teacher = teachers.find(t => t.id === tIdKey);
+    const classGroup = classes.find(c => c.id === cIdKey);
 
     const expected = expectedCounts[key] || 0;
     const abs = absenceCounts[key] || 0;
@@ -141,7 +230,7 @@ export const calculateRapi = (
       report.push({
         teacherName: teacher.name,
         className: classGroup.name,
-        subject,
+        subject: subjKey,
         expected,
         given,
         absences: abs,

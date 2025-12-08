@@ -73,4 +73,15 @@ export interface RapiReportItem {
   given: number;
   absences: number;
   percentage: number;
+  // For daily log view
+  date?: string;
+  isAbsenceRecord?: boolean;
+}
+
+export interface ReportFilters {
+  startDate: string;
+  endDate: string;
+  segmentId: string;
+  classId: string;
+  teacherId: string;
 }
