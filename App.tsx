@@ -7,6 +7,102 @@ import { AppState, CalendarStatus, Segment } from './types';
 // --- Shared Components ---
 const Icon = ({ name }: { name: string }) => <i className={`fa-solid ${name}`}></i>;
 
+// --- Reusable Filter Component ---
+interface EntitySelectorsProps {
+  state: AppState;
+  values: {
+    segmentId?: string;
+    classId?: string;
+    teacherId?: string;
+  };
+  onChange: (field: 'segmentId' | 'classId' | 'teacherId', value: string) => void;
+  showSegment?: boolean;
+  showClass?: boolean;
+  showTeacher?: boolean;
+  labels?: {
+    segment?: string;
+    class?: string;
+    teacher?: string;
+  };
+  // If true, shows "Selecione..." instead of "Todos/Todas" and validates selection
+  mode?: 'filter' | 'selection'; 
+}
+
+const EntitySelectors = ({ 
+  state, 
+  values, 
+  onChange, 
+  showSegment = true, 
+  showClass = true, 
+  showTeacher = true, 
+  labels,
+  mode = 'filter'
+}: EntitySelectorsProps) => {
+  
+  // Filter classes based on selected segment
+  const filteredClasses = useMemo(() => {
+    if (!values.segmentId) return state.classes;
+    return state.classes.filter(c => c.segmentId === values.segmentId);
+  }, [state.classes, values.segmentId]);
+
+  const defaultOption = mode === 'filter' ? 'Todos(as)' : 'Selecione...';
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {showSegment && (
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">{labels?.segment || 'Modalidade'}</label>
+          <select 
+            value={values.segmentId || ''} 
+            onChange={e => {
+                onChange('segmentId', e.target.value);
+                // Reset class if segment changes and current class doesn't belong to new segment
+                if (values.classId) {
+                    const currentClass = state.classes.find(c => c.id === values.classId);
+                    if (currentClass && currentClass.segmentId !== e.target.value && e.target.value !== '') {
+                        onChange('classId', '');
+                    }
+                }
+            }} 
+            className="border rounded px-3 py-2 w-full text-sm bg-white"
+          >
+            <option value="">{defaultOption}</option>
+            {state.segments.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+      )}
+      
+      {showClass && (
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">{labels?.class || 'Turma'}</label>
+          <select 
+            value={values.classId || ''} 
+            onChange={e => onChange('classId', e.target.value)} 
+            className="border rounded px-3 py-2 w-full text-sm bg-white"
+          >
+            <option value="">{defaultOption}</option>
+            {filteredClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+      )}
+
+      {showTeacher && (
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">{labels?.teacher || 'Professor'}</label>
+          <select 
+            value={values.teacherId || ''} 
+            onChange={e => onChange('teacherId', e.target.value)} 
+            className="border rounded px-3 py-2 w-full text-sm bg-white"
+          >
+            <option value="">{defaultOption}</option>
+            {state.teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // --- Sub-Components (Panels) ---
 
 const DashboardPanel = ({ state }: { state: AppState }) => (
@@ -378,9 +474,18 @@ const CalendarPanel = ({
            </table>
          </div>
          
-         <div className="mt-4 p-4 bg-yellow-50 text-yellow-800 text-sm rounded-lg border border-yellow-200">
-           <i className="fa-solid fa-triangle-exclamation mr-2"></i>
-           <strong>Atenção:</strong> As alterações são salvas automaticamente. Este calendário está vinculado à modalidade <strong>{segments.find(s => s.id === selectedSegId)?.name}</strong>.
+         <div className="mt-4 flex justify-between items-center">
+             <div className="p-4 bg-yellow-50 text-yellow-800 text-sm rounded-lg border border-yellow-200 flex-1 mr-4">
+                <i className="fa-solid fa-triangle-exclamation mr-2"></i>
+                <strong>Atenção:</strong> Se não configurar, dias úteis serão considerados "Letivos".
+             </div>
+             <button 
+                onClick={() => alert("As alterações deste mês foram registradas.")} 
+                className="bg-green-600 text-white px-4 py-3 rounded-lg shadow font-medium hover:bg-green-700 whitespace-nowrap"
+             >
+                <i className="fa-solid fa-check-circle mr-2"></i>
+                Salvar/Confirmar Mês
+             </button>
          </div>
       </div>
     </div>
@@ -478,6 +583,7 @@ const SchedulePanel = ({ state, onUpdate }: { state: AppState, onUpdate: any }) 
 
 const AbsencesPanel = ({ state, onAdd, onDelete }: { state: AppState, onAdd: any, onDelete: any }) => {
     const [date, setDate] = useState('');
+    const [segId, setSegId] = useState('');
     const [tId, setTId] = useState('');
     const [cId, setCId] = useState('');
     const [subj, setSubj] = useState('');
@@ -494,42 +600,47 @@ const AbsencesPanel = ({ state, onAdd, onDelete }: { state: AppState, onAdd: any
         return Array.from(subjects);
     }, [tId, cId, state.schedule]);
 
+    const handleFilterChange = (field: string, value: string) => {
+        if (field === 'segmentId') setSegId(value);
+        if (field === 'classId') setCId(value);
+        if (field === 'teacherId') setTId(value);
+        if (field === 'classId' || field === 'teacherId') setSubj(''); // Reset subject
+    };
+
     return (
         <div className="space-y-6">
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                 <h3 className="text-lg font-semibold mb-4 text-gray-800">Lançar Falta</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+                
+                {/* Reusable Filter Component for Selection */}
+                <div className="mb-4 bg-gray-50 p-4 rounded-lg border border-gray-100">
+                    <EntitySelectors 
+                        state={state} 
+                        values={{ segmentId: segId, classId: cId, teacherId: tId }} 
+                        onChange={handleFilterChange}
+                        mode="selection"
+                    />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                     <div>
-                        <label className="text-xs text-gray-500">Data</label>
-                        <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full border rounded p-2" />
+                        <label className="text-xs text-gray-500 mb-1 block">Data da Falta</label>
+                        <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full border rounded px-3 py-2" />
                     </div>
                     <div>
-                        <label className="text-xs text-gray-500">Professor</label>
-                        <select value={tId} onChange={e => setTId(e.target.value)} className="w-full border rounded p-2">
-                            <option value="">Selecione...</option>
-                            {state.teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                        </select>
-                    </div>
-                    <div>
-                        <label className="text-xs text-gray-500">Turma</label>
-                        <select value={cId} onChange={e => setCId(e.target.value)} className="w-full border rounded p-2">
-                            <option value="">Selecione...</option>
-                            {state.classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                        </select>
-                    </div>
-                    <div>
-                        <label className="text-xs text-gray-500">Disciplina</label>
-                        <select value={subj} onChange={e => setSubj(e.target.value)} className="w-full border rounded p-2">
-                            <option value="">{availableSubjects.length ? 'Selecione...' : 'Automático'}</option>
+                        <label className="text-xs text-gray-500 mb-1 block">Disciplina</label>
+                        <select value={subj} onChange={e => setSubj(e.target.value)} className="w-full border rounded px-3 py-2 bg-white">
+                            <option value="">{availableSubjects.length ? 'Selecione...' : '(Selecione prof/turma)'}</option>
                             {availableSubjects.map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                     </div>
                     <div>
-                        <label className="text-xs text-gray-500">Qtd Aulas</label>
-                        <input type="number" min="1" max="10" value={amt} onChange={e => setAmt(Number(e.target.value))} className="w-full border rounded p-2" />
+                        <label className="text-xs text-gray-500 mb-1 block">Qtd Aulas</label>
+                        <input type="number" min="1" max="10" value={amt} onChange={e => setAmt(Number(e.target.value))} className="w-full border rounded px-3 py-2" />
                     </div>
                 </div>
-                <div className="mt-4">
+                
+                <div className="mt-6 flex justify-end">
                      <button 
                         disabled={!date || !tId || !cId || (!subj && availableSubjects.length > 1)}
                         onClick={() => {
@@ -537,7 +648,7 @@ const AbsencesPanel = ({ state, onAdd, onDelete }: { state: AppState, onAdd: any
                              onAdd(date, tId, cId, finalSubj, amt);
                              setAmt(1);
                         }}
-                        className="bg-red-500 text-white px-6 py-2 rounded-lg hover:bg-red-600 disabled:opacity-50 w-full md:w-auto"
+                        className="bg-red-500 text-white px-6 py-2 rounded-lg hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed font-medium shadow-sm w-full md:w-auto"
                      >
                         Registrar Falta
                      </button>
@@ -708,6 +819,12 @@ const ReportsPanel = ({ state }: { state: AppState }) => {
       printWindow.document.close();
   };
 
+  const handleFilterChange = (field: string, value: string) => {
+      if (field === 'segmentId') setFSegment(value);
+      if (field === 'classId') setFClass(value);
+      if (field === 'teacherId') setFTeacher(value);
+  };
+
   return (
       <div className="space-y-6">
           {/* Config Panel */}
@@ -733,28 +850,15 @@ const ReportsPanel = ({ state }: { state: AppState }) => {
                   </div>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 pt-4 border-t border-gray-100">
-                   <div>
-                       <label className="block text-xs text-gray-500 mb-1">Filtrar Modalidade</label>
-                       <select value={fSegment} onChange={e => setFSegment(e.target.value)} className="border rounded px-3 py-2 w-full text-sm">
-                           <option value="">Todas</option>
-                           {state.segments.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                       </select>
-                   </div>
-                   <div>
-                       <label className="block text-xs text-gray-500 mb-1">Filtrar Turma</label>
-                       <select value={fClass} onChange={e => setFClass(e.target.value)} className="border rounded px-3 py-2 w-full text-sm">
-                           <option value="">Todas</option>
-                           {state.classes.filter(c => !fSegment || c.segmentId === fSegment).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                       </select>
-                   </div>
-                   <div>
-                       <label className="block text-xs text-gray-500 mb-1">Filtrar Professor</label>
-                       <select value={fTeacher} onChange={e => setFTeacher(e.target.value)} className="border rounded px-3 py-2 w-full text-sm">
-                           <option value="">Todos</option>
-                           {state.teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                       </select>
-                   </div>
+              <div className="pt-4 border-t border-gray-100 mb-6">
+                  {/* Reusable Filters */}
+                  <EntitySelectors 
+                    state={state} 
+                    values={{ segmentId: fSegment, classId: fClass, teacherId: fTeacher }}
+                    onChange={handleFilterChange}
+                    labels={{ segment: 'Filtrar Modalidade', class: 'Filtrar Turma', teacher: 'Filtrar Professor' }}
+                    mode="filter"
+                  />
               </div>
 
               <div className="flex justify-between items-center">
