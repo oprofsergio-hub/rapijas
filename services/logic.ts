@@ -127,16 +127,15 @@ export const calculateRapi = (
     // Iterate every date in the selected range
     dateRange.forEach(dateStr => {
       const ym = dateStr.substring(0, 7);
-      const status = calendars[cls.segmentId]?.[ym]?.[dateStr];
+      // Fallback: if calendário não tem status definido, considerar dia útil como letivo.
+      const status = calendars[cls.segmentId]?.[ym]?.[dateStr] || 'letivo';
 
-      // Only count 'letivo'. 
-      // NOTE: 'sabado_letivo' logic usually requires a mapped weekday (e.g., "This saturday follows Monday schedule").
-      // Since we don't have Saturday Mapping in UI yet, we skip saturday unless explicitly customized.
-      // For now, we only count M-F if status is letivo.
-      if (status !== 'letivo') return;
+      // Ignorar feriados/dias não letivos explícitos.
+      if (status === 'nao_letivo' || status === 'feriado') return;
 
       const dayOfWeek = getWeekdayFromDate(dateStr);
-      if (dayOfWeek === 0 || dayOfWeek === 6) return; // Skip weekends for standard calc
+      // Só contar sábado se marcado como "sabado_letivo"; nunca contar domingo.
+      if (dayOfWeek === 0 || (dayOfWeek === 6 && status !== 'sabado_letivo')) return;
 
       const slots = dailySchedule[dayOfWeek];
       if (!slots) return;
