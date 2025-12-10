@@ -68,17 +68,21 @@ export const getWeekdayFromDate = (dateStr: string): number => {
 // Helper to get all dates between start and end
 export const getDatesInRange = (startDate: string, endDate: string): string[] => {
   const dates = [];
-  const start = new Date(startDate);
-  const end = new Date(endDate);
   
-  // Safety check to prevent infinite loops if dates are bad
-  if (start > end) return [];
+  // Always operate in UTC to avoid DST jumps skipping/duplicating days
+  const [sy, sm, sd] = startDate.split('-').map(Number);
+  const [ey, em, ed] = endDate.split('-').map(Number);
 
-  const current = new Date(start);
-  while (current <= end) {
-    dates.push(current.toISOString().split('T')[0]);
-    current.setDate(current.getDate() + 1);
+  const startUtc = Date.UTC(sy, sm - 1, sd);
+  const endUtc = Date.UTC(ey, em - 1, ed);
+
+  if (startUtc > endUtc) return [];
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  for (let ts = startUtc; ts <= endUtc; ts += DAY_MS) {
+    dates.push(new Date(ts).toISOString().split('T')[0]);
   }
+  
   return dates;
 };
 
